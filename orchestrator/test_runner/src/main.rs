@@ -7,9 +7,13 @@
 extern crate log;
 
 use crate::airdrop_proposal::airdrop_proposal_test;
+use crate::auction::{
+    auction_disabled_test, auction_invalid_params_test, auction_test_random, auction_test_static,
+};
 use crate::batch_timeout::batch_timeout_test;
 use crate::bootstrapping::*;
 use crate::deposit_overflow::deposit_overflow_test;
+use crate::eip_712::eip_712_test;
 use crate::ethereum_blacklist_test::ethereum_blacklist_test;
 use crate::ethereum_keys::ethereum_keys_test;
 use crate::ibc_auto_forward::ibc_auto_forward_test;
@@ -49,9 +53,11 @@ use unhalt_bridge::unhalt_bridge_test;
 use valset_stress::validator_set_stress_test;
 
 mod airdrop_proposal;
+mod auction;
 mod batch_timeout;
 mod bootstrapping;
 mod deposit_overflow;
+mod eip_712;
 mod erc_721_happy_path;
 mod ethereum_blacklist_test;
 mod ethereum_keys;
@@ -93,7 +99,7 @@ lazy_static! {
     static ref ADDRESS_PREFIX: String =
         env::var("ADDRESS_PREFIX").unwrap_or_else(|_| "gravity".to_string());
     static ref STAKING_TOKEN: String =
-        env::var("STAKING_TOKEN").unwrap_or_else(|_| "stake".to_owned());
+        env::var("STAKING_TOKEN").unwrap_or_else(|_| "ugraviton".to_owned());
     static ref COSMOS_NODE_GRPC: String =
         env::var("COSMOS_NODE_GRPC").unwrap_or_else(|_| "http://localhost:9090".to_owned());
     static ref COSMOS_NODE_ABCI: String =
@@ -597,13 +603,66 @@ pub async fn main() {
             )
             .await;
             return;
-        } else if test_type == "RUN_ORCH_ONLY" {
-            orch_only_test(keys, gravity_address).await;
-            sleep(Duration::from_secs(1_000_000_000)).await;
-            return;
         } else if test_type == "INFLATION_KNOCKDOWN" {
             info!("Starting Inflation knockdown test!");
             inflation_knockdown_test(&gravity_contact, keys).await;
+            return;
+        } else if test_type == "EIP712" || test_type == "EIP_712" {
+            info!("Starting EIP-712 signing test!");
+            eip_712_test(
+                &web30,
+                grpc_client,
+                &gravity_contact,
+                keys,
+                ibc_keys,
+                gravity_address,
+                erc20_addresses[0],
+            )
+            .await;
+            return;
+        } else if test_type == "AUCTION_STATIC" {
+            info!("Starting Auction Static test");
+            auction_test_static(
+                &web30,
+                &gravity_contact,
+                grpc_client,
+                keys,
+                gravity_address,
+                erc20_addresses,
+            )
+            .await;
+            return;
+        } else if test_type == "AUCTION_RANDOM" {
+            info!("Starting Auction Random bids test");
+            auction_test_random(
+                &web30,
+                &gravity_contact,
+                grpc_client,
+                keys,
+                gravity_address,
+                erc20_addresses,
+            )
+            .await;
+            return;
+        } else if test_type == "AUCTION_INVALID_PARAMS" {
+            info!("Starting Auction Invalid Params test");
+            auction_invalid_params_test(&gravity_contact, keys).await;
+            return;
+        } else if test_type == "AUCTION_DISABLE" {
+            info!("Starting Auction Disabled param test");
+            auction_disabled_test(
+                &web30,
+                &gravity_contact,
+                grpc_client,
+                keys,
+                gravity_address,
+                erc20_addresses,
+            )
+            .await;
+            return;
+        } else if test_type == "RUN_ORCH_ONLY" {
+            orch_only_test(keys, gravity_address).await;
+            sleep(Duration::from_secs(1_000_000_000)).await;
             return;
         } else if !test_type.is_empty() {
             panic!("Err Unknown test type")

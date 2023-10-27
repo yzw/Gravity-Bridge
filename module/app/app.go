@@ -119,9 +119,14 @@ import (
 	"github.com/Gravity-Bridge/Gravity-Bridge/module/app/upgrades"
 	"github.com/Gravity-Bridge/Gravity-Bridge/module/app/upgrades/antares"
 	v2 "github.com/Gravity-Bridge/Gravity-Bridge/module/app/upgrades/v2"
+	gravityconfig "github.com/Gravity-Bridge/Gravity-Bridge/module/config"
 	"github.com/Gravity-Bridge/Gravity-Bridge/module/x/gravity"
 	"github.com/Gravity-Bridge/Gravity-Bridge/module/x/gravity/keeper"
 	gravitytypes "github.com/Gravity-Bridge/Gravity-Bridge/module/x/gravity/types"
+
+	"github.com/Gravity-Bridge/Gravity-Bridge/module/x/auction"
+	auckeeper "github.com/Gravity-Bridge/Gravity-Bridge/module/x/auction/keeper"
+	auctiontypes "github.com/Gravity-Bridge/Gravity-Bridge/module/x/auction/types"
 )
 
 const appName = "app"
@@ -160,6 +165,7 @@ var (
 		transfer.AppModuleBasic{},
 		vesting.AppModuleBasic{},
 		gravity.AppModuleBasic{},
+		auction.AppModuleBasic{},
 		bech32ibc.AppModuleBasic{},
 		ica.AppModuleBasic{},
 	)
@@ -167,15 +173,17 @@ var (
 	// module account permissions
 	// NOTE: We believe that this is giving various modules access to functions of the supply module? We will probably need to use this.
 	maccPerms = map[string][]string{
-		authtypes.FeeCollectorName:     nil,
-		distrtypes.ModuleName:          nil,
-		minttypes.ModuleName:           {authtypes.Minter},
-		stakingtypes.BondedPoolName:    {authtypes.Burner, authtypes.Staking},
-		stakingtypes.NotBondedPoolName: {authtypes.Burner, authtypes.Staking},
-		govtypes.ModuleName:            {authtypes.Burner},
-		ibctransfertypes.ModuleName:    {authtypes.Minter, authtypes.Burner},
-		gravitytypes.ModuleName:        {authtypes.Minter, authtypes.Burner},
-		icatypes.ModuleName:            nil,
+		authtypes.FeeCollectorName:          nil,
+		distrtypes.ModuleName:               nil,
+		minttypes.ModuleName:                {authtypes.Minter},
+		stakingtypes.BondedPoolName:         {authtypes.Burner, authtypes.Staking},
+		stakingtypes.NotBondedPoolName:      {authtypes.Burner, authtypes.Staking},
+		govtypes.ModuleName:                 {authtypes.Burner},
+		ibctransfertypes.ModuleName:         {authtypes.Minter, authtypes.Burner},
+		gravitytypes.ModuleName:             {authtypes.Minter, authtypes.Burner},
+		auctiontypes.ModuleName:             {authtypes.Minter, authtypes.Burner},
+		icatypes.ModuleName:                 nil,
+		auctiontypes.AuctionPoolAccountName: nil,
 	}
 
 	// module accounts that are allowed to receive tokens
@@ -207,8 +215,8 @@ func MakeCodec() *codec.LegacyAmino {
 type Gravity struct {
 	*baseapp.BaseApp
 	legacyAmino       *codec.LegacyAmino
-	appCodec          codec.Codec
-	interfaceRegistry types.InterfaceRegistry
+	AppCodec          codec.Codec
+	InterfaceRegistry types.InterfaceRegistry
 
 	invCheckPeriod uint
 
@@ -219,24 +227,25 @@ type Gravity struct {
 
 	// keepers
 	// NOTE: If you add anything to this struct, add a nil check to ValidateMembers below!
-	accountKeeper     *authkeeper.AccountKeeper
-	authzKeeper       *authzkeeper.Keeper
-	bankKeeper        *bankkeeper.BaseKeeper
-	capabilityKeeper  *capabilitykeeper.Keeper
-	stakingKeeper     *stakingkeeper.Keeper
-	slashingKeeper    *slashingkeeper.Keeper
-	mintKeeper        *mintkeeper.Keeper
-	distrKeeper       *distrkeeper.Keeper
-	govKeeper         *govkeeper.Keeper
-	crisisKeeper      *crisiskeeper.Keeper
-	upgradeKeeper     *upgradekeeper.Keeper
-	paramsKeeper      *paramskeeper.Keeper
-	ibcKeeper         *ibckeeper.Keeper
-	evidenceKeeper    *evidencekeeper.Keeper
-	ibcTransferKeeper *ibctransferkeeper.Keeper
-	gravityKeeper     *keeper.Keeper
-	bech32IbcKeeper   *bech32ibckeeper.Keeper
-	icaHostKeeper     *icahostkeeper.Keeper
+	AccountKeeper     *authkeeper.AccountKeeper
+	AuthzKeeper       *authzkeeper.Keeper
+	BankKeeper        *bankkeeper.BaseKeeper
+	CapabilityKeeper  *capabilitykeeper.Keeper
+	StakingKeeper     *stakingkeeper.Keeper
+	SlashingKeeper    *slashingkeeper.Keeper
+	MintKeeper        *mintkeeper.Keeper
+	DistrKeeper       *distrkeeper.Keeper
+	GovKeeper         *govkeeper.Keeper
+	CrisisKeeper      *crisiskeeper.Keeper
+	UpgradeKeeper     *upgradekeeper.Keeper
+	ParamsKeeper      *paramskeeper.Keeper
+	IbcKeeper         *ibckeeper.Keeper
+	EvidenceKeeper    *evidencekeeper.Keeper
+	IbcTransferKeeper *ibctransferkeeper.Keeper
+	GravityKeeper     *keeper.Keeper
+	AuctionKeeper     *auckeeper.Keeper
+	Bech32IbcKeeper   *bech32ibckeeper.Keeper
+	IcaHostKeeper     *icahostkeeper.Keeper
 
 	// make scoped keepers public for test purposes
 	// NOTE: If you add anything to this struct, add a nil check to ValidateMembers below!
@@ -261,58 +270,61 @@ func (app Gravity) ValidateMembers() {
 	}
 
 	// keepers
-	if app.accountKeeper == nil {
+	if app.AccountKeeper == nil {
 		panic("Nil accountKeeper!")
 	}
-	if app.authzKeeper == nil {
+	if app.AuthzKeeper == nil {
 		panic("Nil authzKeeper!")
 	}
-	if app.bankKeeper == nil {
+	if app.BankKeeper == nil {
 		panic("Nil bankKeeper!")
 	}
-	if app.capabilityKeeper == nil {
+	if app.CapabilityKeeper == nil {
 		panic("Nil capabilityKeeper!")
 	}
-	if app.stakingKeeper == nil {
+	if app.StakingKeeper == nil {
 		panic("Nil stakingKeeper!")
 	}
-	if app.slashingKeeper == nil {
+	if app.SlashingKeeper == nil {
 		panic("Nil slashingKeeper!")
 	}
-	if app.mintKeeper == nil {
+	if app.MintKeeper == nil {
 		panic("Nil mintKeeper!")
 	}
-	if app.distrKeeper == nil {
+	if app.DistrKeeper == nil {
 		panic("Nil distrKeeper!")
 	}
-	if app.govKeeper == nil {
+	if app.GovKeeper == nil {
 		panic("Nil govKeeper!")
 	}
-	if app.crisisKeeper == nil {
+	if app.CrisisKeeper == nil {
 		panic("Nil crisisKeeper!")
 	}
-	if app.upgradeKeeper == nil {
+	if app.UpgradeKeeper == nil {
 		panic("Nil upgradeKeeper!")
 	}
-	if app.paramsKeeper == nil {
+	if app.ParamsKeeper == nil {
 		panic("Nil paramsKeeper!")
 	}
-	if app.ibcKeeper == nil {
+	if app.IbcKeeper == nil {
 		panic("Nil ibcKeeper!")
 	}
-	if app.evidenceKeeper == nil {
+	if app.EvidenceKeeper == nil {
 		panic("Nil evidenceKeeper!")
 	}
-	if app.ibcTransferKeeper == nil {
+	if app.IbcTransferKeeper == nil {
 		panic("Nil ibcTransferKeeper!")
 	}
-	if app.gravityKeeper == nil {
+	if app.GravityKeeper == nil {
 		panic("Nil gravityKeeper!")
 	}
-	if app.bech32IbcKeeper == nil {
+	if app.AuctionKeeper == nil {
+		panic("Nil auctionKeeper!")
+	}
+	if app.Bech32IbcKeeper == nil {
 		panic("Nil bech32IbcKeeper!")
 	}
-	if app.icaHostKeeper == nil {
+	if app.IcaHostKeeper == nil {
 		panic("Nil icaHostKeeper!")
 	}
 
@@ -362,7 +374,7 @@ func NewGravityApp(
 		slashingtypes.StoreKey, govtypes.StoreKey, paramstypes.StoreKey,
 		ibchost.StoreKey, upgradetypes.StoreKey, evidencetypes.StoreKey,
 		ibctransfertypes.StoreKey, capabilitytypes.StoreKey,
-		gravitytypes.StoreKey, bech32ibctypes.StoreKey,
+		gravitytypes.StoreKey, auctiontypes.StoreKey, bech32ibctypes.StoreKey,
 		icahosttypes.StoreKey,
 	)
 	tKeys := sdk.NewTransientStoreKeys(paramstypes.TStoreKey)
@@ -372,8 +384,8 @@ func NewGravityApp(
 	var app = &Gravity{
 		BaseApp:           &bApp,
 		legacyAmino:       legacyAmino,
-		appCodec:          appCodec,
-		interfaceRegistry: interfaceRegistry,
+		AppCodec:          appCodec,
+		InterfaceRegistry: interfaceRegistry,
 		invCheckPeriod:    invCheckPeriod,
 		keys:              keys,
 		tKeys:             tKeys,
@@ -381,7 +393,7 @@ func NewGravityApp(
 	}
 
 	paramsKeeper := initParamsKeeper(appCodec, legacyAmino, keys[paramstypes.StoreKey], tKeys[paramstypes.TStoreKey])
-	app.paramsKeeper = &paramsKeeper
+	app.ParamsKeeper = &paramsKeeper
 
 	bApp.SetParamStore(paramsKeeper.Subspace(baseapp.Paramspace).WithKeyTable(paramskeeper.ConsensusParamsKeyTable()))
 
@@ -390,7 +402,7 @@ func NewGravityApp(
 		keys[capabilitytypes.StoreKey],
 		memKeys[capabilitytypes.MemStoreKey],
 	)
-	app.capabilityKeeper = &capabilityKeeper
+	app.CapabilityKeeper = &capabilityKeeper
 
 	scopedIBCKeeper := capabilityKeeper.ScopeToModule(ibchost.ModuleName)
 	app.ScopedIBCKeeper = &scopedIBCKeeper
@@ -412,14 +424,14 @@ func NewGravityApp(
 		authtypes.ProtoBaseAccount,
 		maccPerms,
 	)
-	app.accountKeeper = &accountKeeper
+	app.AccountKeeper = &accountKeeper
 
 	authzKeeper := authzkeeper.NewKeeper(
 		keys[authzkeeper.StoreKey],
 		appCodec,
 		bApp.MsgServiceRouter(),
 	)
-	app.authzKeeper = &authzKeeper
+	app.AuthzKeeper = &authzKeeper
 
 	bankKeeper := bankkeeper.NewBaseKeeper(
 		appCodec,
@@ -428,7 +440,7 @@ func NewGravityApp(
 		app.GetSubspace(banktypes.ModuleName),
 		app.BlockedAddrs(),
 	)
-	app.bankKeeper = &bankKeeper
+	app.BankKeeper = &bankKeeper
 
 	stakingKeeper := stakingkeeper.NewKeeper(
 		appCodec,
@@ -437,7 +449,7 @@ func NewGravityApp(
 		bankKeeper,
 		app.GetSubspace(stakingtypes.ModuleName),
 	)
-	app.stakingKeeper = &stakingKeeper
+	app.StakingKeeper = &stakingKeeper
 
 	distrKeeper := distrkeeper.NewKeeper(
 		appCodec,
@@ -449,7 +461,7 @@ func NewGravityApp(
 		authtypes.FeeCollectorName,
 		app.ModuleAccountAddrs(),
 	)
-	app.distrKeeper = &distrKeeper
+	app.DistrKeeper = &distrKeeper
 
 	slashingKeeper := slashingkeeper.NewKeeper(
 		appCodec,
@@ -457,7 +469,7 @@ func NewGravityApp(
 		&stakingKeeper,
 		app.GetSubspace(slashingtypes.ModuleName),
 	)
-	app.slashingKeeper = &slashingKeeper
+	app.SlashingKeeper = &slashingKeeper
 
 	upgradeKeeper := upgradekeeper.NewKeeper(
 		skipUpgradeHeights,
@@ -466,7 +478,7 @@ func NewGravityApp(
 		homePath,
 		&bApp,
 	)
-	app.upgradeKeeper = &upgradeKeeper
+	app.UpgradeKeeper = &upgradeKeeper
 
 	ibcKeeper := *ibckeeper.NewKeeper(
 		appCodec,
@@ -476,27 +488,49 @@ func NewGravityApp(
 		upgradeKeeper,
 		scopedIBCKeeper,
 	)
-	app.ibcKeeper = &ibcKeeper
+	app.IbcKeeper = &ibcKeeper
 
 	ibcTransferKeeper := ibctransferkeeper.NewKeeper(
 		appCodec, keys[ibctransfertypes.StoreKey], app.GetSubspace(ibctransfertypes.ModuleName),
 		ibcKeeper.ChannelKeeper, ibcKeeper.ChannelKeeper, &ibcKeeper.PortKeeper,
 		accountKeeper, bankKeeper, scopedTransferKeeper,
 	)
-	app.ibcTransferKeeper = &ibcTransferKeeper
+	app.IbcTransferKeeper = &ibcTransferKeeper
 
 	bech32IbcKeeper := *bech32ibckeeper.NewKeeper(
 		ibcKeeper.ChannelKeeper, appCodec, keys[bech32ibctypes.StoreKey],
 		ibcTransferKeeper,
 	)
-	app.bech32IbcKeeper = &bech32IbcKeeper
+	app.Bech32IbcKeeper = &bech32IbcKeeper
 
 	icaHostKeeper := icahostkeeper.NewKeeper(
 		appCodec, keys[icahosttypes.StoreKey], app.GetSubspace(icahosttypes.SubModuleName),
 		ibcKeeper.ChannelKeeper, &ibcKeeper.PortKeeper,
 		accountKeeper, scopedIcaHostKeeper, app.MsgServiceRouter(),
 	)
-	app.icaHostKeeper = &icaHostKeeper
+	app.IcaHostKeeper = &icaHostKeeper
+
+	mintKeeper := mintkeeper.NewKeeper(
+		appCodec,
+		keys[minttypes.StoreKey],
+		app.GetSubspace(minttypes.ModuleName),
+		stakingKeeper,
+		accountKeeper,
+		bankKeeper,
+		authtypes.FeeCollectorName,
+	)
+	app.MintKeeper = &mintKeeper
+
+	auctionKeeper := auckeeper.NewKeeper(
+		keys[auctiontypes.StoreKey],
+		app.GetSubspace(auctiontypes.ModuleName),
+		appCodec,
+		&bankKeeper,
+		&accountKeeper,
+		&distrKeeper,
+		&mintKeeper,
+	)
+	app.AuctionKeeper = &auctionKeeper
 
 	gravityKeeper := keeper.NewKeeper(
 		keys[gravitytypes.StoreKey],
@@ -509,8 +543,9 @@ func NewGravityApp(
 		&accountKeeper,
 		&ibcTransferKeeper,
 		&bech32IbcKeeper,
+		&auctionKeeper,
 	)
-	app.gravityKeeper = &gravityKeeper
+	app.GravityKeeper = &gravityKeeper
 
 	// Add the staking hooks from distribution, slashing, and gravity to staking
 	stakingKeeper.SetHooks(
@@ -521,24 +556,13 @@ func NewGravityApp(
 		),
 	)
 
-	mintKeeper := mintkeeper.NewKeeper(
-		appCodec,
-		keys[minttypes.StoreKey],
-		app.GetSubspace(minttypes.ModuleName),
-		stakingKeeper,
-		accountKeeper,
-		bankKeeper,
-		authtypes.FeeCollectorName,
-	)
-	app.mintKeeper = &mintKeeper
-
 	crisisKeeper := crisiskeeper.NewKeeper(
 		app.GetSubspace(crisistypes.ModuleName),
 		invCheckPeriod,
 		bankKeeper,
 		authtypes.FeeCollectorName,
 	)
-	app.crisisKeeper = &crisisKeeper
+	app.CrisisKeeper = &crisisKeeper
 
 	govRouter := govtypes.NewRouter()
 	govRouter.AddRoute(govtypes.RouterKey, govtypes.ProposalHandler).
@@ -547,7 +571,7 @@ func NewGravityApp(
 		AddRoute(upgradetypes.RouterKey, upgrade.NewSoftwareUpgradeProposalHandler(upgradeKeeper)).
 		AddRoute(ibcclienttypes.RouterKey, ibcclient.NewClientProposalHandler(ibcKeeper.ClientKeeper)).
 		AddRoute(gravitytypes.RouterKey, keeper.NewGravityProposalHandler(gravityKeeper)).
-		AddRoute(bech32ibctypes.RouterKey, bech32ibc.NewBech32IBCProposalHandler(*app.bech32IbcKeeper))
+		AddRoute(bech32ibctypes.RouterKey, bech32ibc.NewBech32IBCProposalHandler(*app.Bech32IbcKeeper))
 
 	govKeeper := govkeeper.NewKeeper(
 		appCodec,
@@ -558,7 +582,7 @@ func NewGravityApp(
 		stakingKeeper,
 		govRouter,
 	)
-	app.govKeeper = &govKeeper
+	app.GovKeeper = &govKeeper
 
 	ibcTransferAppModule := transfer.NewAppModule(ibcTransferKeeper)
 	ibcTransferIBCModule := transfer.NewIBCModule(ibcTransferKeeper)
@@ -576,7 +600,7 @@ func NewGravityApp(
 		&stakingKeeper,
 		slashingKeeper,
 	)
-	app.evidenceKeeper = &evidenceKeeper
+	app.EvidenceKeeper = &evidenceKeeper
 
 	var skipGenesisInvariants = cast.ToBool(appOpts.Get(crisis.FlagSkipGenesisInvariants))
 
@@ -599,7 +623,7 @@ func NewGravityApp(
 			authzKeeper,
 			accountKeeper,
 			bankKeeper,
-			app.InterfaceRegistry(),
+			app.InterfaceRegistry,
 		),
 		vesting.NewAppModule(
 			accountKeeper,
@@ -657,6 +681,11 @@ func NewGravityApp(
 			gravityKeeper,
 			bankKeeper,
 		),
+		auction.NewAppModule(
+			auctionKeeper,
+			bankKeeper,
+			accountKeeper,
+		),
 		bech32ibc.NewAppModule(
 			appCodec,
 			bech32IbcKeeper,
@@ -682,6 +711,7 @@ func NewGravityApp(
 		ibctransfertypes.ModuleName,
 		bech32ibctypes.ModuleName,
 		gravitytypes.ModuleName,
+		auctiontypes.ModuleName,
 		genutiltypes.ModuleName,
 		authz.ModuleName,
 		govtypes.ModuleName,
@@ -694,6 +724,7 @@ func NewGravityApp(
 		stakingtypes.ModuleName,
 		icatypes.ModuleName,
 		gravitytypes.ModuleName,
+		auctiontypes.ModuleName,
 		upgradetypes.ModuleName,
 		capabilitytypes.ModuleName,
 		minttypes.ModuleName,
@@ -727,6 +758,7 @@ func NewGravityApp(
 		authz.ModuleName,
 		bech32ibctypes.ModuleName, // Must go before gravity so that pending ibc auto forwards can be restored
 		gravitytypes.ModuleName,
+		auctiontypes.ModuleName, // Must go after bank module to verify balances
 		crisistypes.ModuleName,
 		vestingtypes.ModuleName,
 		paramstypes.ModuleName,
@@ -773,7 +805,7 @@ func NewGravityApp(
 	}
 
 	// Note: If feegrant keeper is added, add it to the NewAnteHandler call instead of nil
-	ah, err := ante.NewAnteHandler(options, &gravityKeeper, &accountKeeper, &bankKeeper, nil, &ibcKeeper, appCodec)
+	ah, err := ante.NewAnteHandler(options, &gravityKeeper, &accountKeeper, &bankKeeper, nil, &ibcKeeper, appCodec, gravityconfig.GravityEvmChainID)
 	if err != nil {
 		panic("invalid antehandler created")
 	}
@@ -821,6 +853,8 @@ func (app *Gravity) BeginBlocker(ctx sdk.Context, req abci.RequestBeginBlock) ab
 // Note: This should ONLY be called once, it should be called at the top of BeginBlocker guarded by firstBlock
 func (app *Gravity) firstBeginBlocker(ctx sdk.Context) {
 	app.assertBech32PrefixMatches(ctx)
+	app.assertNativeTokenMatchesConstant(ctx)
+	app.assertNativeTokenIsNonAuctionable(ctx)
 }
 
 // EndBlocker application updates every end block
@@ -835,9 +869,9 @@ func (app *Gravity) InitChainer(ctx sdk.Context, req abci.RequestInitChain) abci
 		panic(err)
 	}
 
-	app.upgradeKeeper.SetModuleVersionMap(ctx, app.mm.GetVersionMap())
+	app.UpgradeKeeper.SetModuleVersionMap(ctx, app.mm.GetVersionMap())
 
-	return app.mm.InitGenesis(ctx, app.appCodec, genesisState)
+	return app.mm.InitGenesis(ctx, app.AppCodec, genesisState)
 }
 
 // LoadHeight loads a particular height
@@ -866,51 +900,9 @@ func (app *Gravity) BlockedAddrs() map[string]bool {
 	return blockedAddrs
 }
 
-// LegacyAmino returns SimApp's amino codec.
-//
-// NOTE: This is solely to be used for testing purposes as it may be desirable
-// for modules to register their own custom testing types.
-func (app *Gravity) LegacyAmino() *codec.LegacyAmino {
-	return app.legacyAmino
-}
-
-// AppCodec returns SimApp's app codec.
-//
-// NOTE: This is solely to be used for testing purposes as it may be desirable
-// for modules to register their own custom testing types.
-func (app *Gravity) AppCodec() codec.Codec {
-	return app.appCodec
-}
-
-// InterfaceRegistry returns SimApp's InterfaceRegistry
-func (app *Gravity) InterfaceRegistry() types.InterfaceRegistry {
-	return app.interfaceRegistry
-}
-
-// GetKey returns the KVStoreKey for the provided store key.
-//
-// NOTE: This is solely to be used for testing purposes.
-func (app *Gravity) GetKey(storeKey string) *sdk.KVStoreKey {
-	return app.keys[storeKey]
-}
-
-// GetTKey returns the TransientStoreKey for the provided store key.
-//
-// NOTE: This is solely to be used for testing purposes.
-func (app *Gravity) GetTKey(storeKey string) *sdk.TransientStoreKey {
-	return app.tKeys[storeKey]
-}
-
-// GetMemKey returns the MemStoreKey for the provided mem key.
-//
-// NOTE: This is solely used for testing purposes.
-func (app *Gravity) GetMemKey(storeKey string) *sdk.MemoryStoreKey {
-	return app.memKeys[storeKey]
-}
-
 // GetSubspace returns a param subspace for a given module name.
 func (app *Gravity) GetSubspace(moduleName string) paramstypes.Subspace {
-	subspace, _ := app.paramsKeeper.GetSubspace(moduleName)
+	subspace, _ := app.ParamsKeeper.GetSubspace(moduleName)
 	return subspace
 }
 
@@ -918,6 +910,18 @@ func (app *Gravity) GetSubspace(moduleName string) paramstypes.Subspace {
 func (app *Gravity) SimulationManager() *module.SimulationManager {
 	return app.sm
 }
+func (app *Gravity) LegacyAmino() *codec.LegacyAmino {
+	return app.legacyAmino
+}
+
+// GetTxConfig implements the TestingApp interface.
+func (app *Gravity) GetTxConfig() client.TxConfig {
+	cfg := MakeEncodingConfig()
+	return cfg.TxConfig
+}
+
+// GetBaseApp returns the base app of the application
+func (app *Gravity) GetBaseApp() *baseapp.BaseApp { return app.BaseApp }
 
 // RegisterAPIRoutes registers all application module routes with the provided
 // API server.
@@ -948,12 +952,12 @@ func RegisterSwaggerAPI(ctx client.Context, rtr *mux.Router) {
 
 // RegisterTxService implements the Application.RegisterTxService method.
 func (app *Gravity) RegisterTxService(clientCtx client.Context) {
-	authtx.RegisterTxService(app.BaseApp.GRPCQueryRouter(), clientCtx, app.BaseApp.Simulate, app.interfaceRegistry)
+	authtx.RegisterTxService(app.BaseApp.GRPCQueryRouter(), clientCtx, app.BaseApp.Simulate, app.InterfaceRegistry)
 }
 
 // RegisterTendermintService implements the Application.RegisterTendermintService method.
 func (app *Gravity) RegisterTendermintService(clientCtx client.Context) {
-	tmservice.RegisterTendermintService(app.BaseApp.GRPCQueryRouter(), clientCtx, app.interfaceRegistry)
+	tmservice.RegisterTendermintService(app.BaseApp.GRPCQueryRouter(), clientCtx, app.InterfaceRegistry)
 }
 
 // GetMaccPerms returns a mapping of the application's module account permissions.
@@ -979,6 +983,7 @@ func initParamsKeeper(appCodec codec.BinaryCodec, legacyAmino *codec.LegacyAmino
 	paramsKeeper.Subspace(crisistypes.ModuleName)
 	paramsKeeper.Subspace(ibctransfertypes.ModuleName)
 	paramsKeeper.Subspace(gravitytypes.ModuleName)
+	paramsKeeper.Subspace(auctiontypes.ModuleName)
 	paramsKeeper.Subspace(ibchost.ModuleName)
 	paramsKeeper.Subspace(icahosttypes.SubModuleName)
 
@@ -988,19 +993,19 @@ func initParamsKeeper(appCodec codec.BinaryCodec, legacyAmino *codec.LegacyAmino
 // Registers handlers for all our upgrades
 func (app *Gravity) registerUpgradeHandlers() {
 	upgrades.RegisterUpgradeHandlers(
-		app.mm, app.configurator, app.accountKeeper, app.bankKeeper, app.bech32IbcKeeper, app.distrKeeper,
-		app.mintKeeper, app.stakingKeeper, app.upgradeKeeper, app.crisisKeeper, app.ibcTransferKeeper,
+		app.mm, app.configurator, app.AccountKeeper, app.BankKeeper, app.Bech32IbcKeeper, app.DistrKeeper,
+		app.MintKeeper, app.StakingKeeper, app.UpgradeKeeper, app.CrisisKeeper, app.IbcTransferKeeper,
 	)
 }
 
 // Sets up the StoreLoader for new, deleted, or renamed modules
 func (app *Gravity) registerStoreLoaders() {
 	// Read the upgrade height and name from previous execution
-	upgradeInfo, err := app.upgradeKeeper.ReadUpgradeInfoFromDisk()
+	upgradeInfo, err := app.UpgradeKeeper.ReadUpgradeInfoFromDisk()
 	if err != nil {
 		panic(fmt.Sprintf("failed to read upgrade info from disk %s", err))
 	}
-	if app.upgradeKeeper.IsSkipHeight(upgradeInfo.Height) {
+	if app.UpgradeKeeper.IsSkipHeight(upgradeInfo.Height) {
 		return
 	}
 

@@ -50,10 +50,15 @@ pub async fn footoken_metadata(contact: &Contact) -> Metadata {
     get_metadata(contact, "footoken").await
 }
 
+/// returns the required denom metadata for deployed the footoken2
+/// token defined in our test environment
+pub async fn footoken2_metadata(contact: &Contact) -> Metadata {
+    get_metadata(contact, "footoken2").await
+}
 /// returns the required denom metadata for the native staking token
 /// token defined in our test environment
-pub async fn stake_metadata(contact: &Contact) -> Metadata {
-    get_metadata(contact, "stake").await
+pub async fn ugraviton_metadata(contact: &Contact) -> Metadata {
+    get_metadata(contact, &STAKING_TOKEN).await
 }
 
 pub async fn get_metadata(contact: &Contact, base_denom: &str) -> Metadata {
@@ -172,12 +177,16 @@ pub async fn send_eth_bulk(amount: Uint256, destinations: &[EthAddress], web3: &
         .unwrap();
     let mut transactions = Vec::new();
     for address in destinations {
-        let t = web3.send_transaction(
-            *address,
-            Vec::new(),
-            amount,
-            *MINER_PRIVATE_KEY,
-            vec![SendTxOption::Nonce(nonce)],
+        let t = web3.send_prepared_transaction(
+            web3.prepare_transaction(
+                *address,
+                Vec::new(),
+                amount,
+                *MINER_PRIVATE_KEY,
+                vec![SendTxOption::Nonce(nonce)],
+            )
+            .await
+            .unwrap(),
         );
         transactions.push(t);
         nonce += 1u64.into();

@@ -7,8 +7,6 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	"github.com/cosmos/cosmos-sdk/codec"
-	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
-	ccodec "github.com/cosmos/cosmos-sdk/crypto/codec"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	ccrypto "github.com/cosmos/cosmos-sdk/crypto/types"
@@ -37,6 +35,8 @@ import (
 	govkeeper "github.com/cosmos/cosmos-sdk/x/gov/keeper"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	"github.com/cosmos/cosmos-sdk/x/mint"
+	mintkeeper "github.com/cosmos/cosmos-sdk/x/mint/keeper"
+	minttypes "github.com/cosmos/cosmos-sdk/x/mint/types"
 	"github.com/cosmos/cosmos-sdk/x/params"
 	paramsclient "github.com/cosmos/cosmos-sdk/x/params/client"
 	paramskeeper "github.com/cosmos/cosmos-sdk/x/params/keeper"
@@ -67,7 +67,13 @@ import (
 	bech32ibckeeper "github.com/althea-net/bech32-ibc/x/bech32ibc/keeper"
 	bech32ibctypes "github.com/althea-net/bech32-ibc/x/bech32ibc/types"
 
+	ethermintcryptocodec "github.com/evmos/ethermint/crypto/codec"
+	ethermintcodec "github.com/evmos/ethermint/encoding/codec"
+	etherminttypes "github.com/evmos/ethermint/types"
+
 	gravityparams "github.com/Gravity-Bridge/Gravity-Bridge/module/app/params"
+	auctionkeeper "github.com/Gravity-Bridge/Gravity-Bridge/module/x/auction/keeper"
+	auctiontypes "github.com/Gravity-Bridge/Gravity-Bridge/module/x/auction/types"
 	"github.com/Gravity-Bridge/Gravity-Bridge/module/x/gravity/types"
 )
 
@@ -238,6 +244,7 @@ var (
 		BridgeActive:                 true,
 		EthereumBlacklist:            []string{},
 		MinChainFeeBasisPoints:       0,
+		ChainFeeAuctionPoolFraction:  sdk.NewDecWithPrec(50, 2), // 50%
 	}
 )
 
@@ -250,10 +257,14 @@ type TestInput struct {
 	DistKeeper        distrkeeper.Keeper
 	BankKeeper        bankkeeper.BaseKeeper
 	GovKeeper         govkeeper.Keeper
+	IbcKeeper         ibckeeper.Keeper
 	IbcTransferKeeper ibctransferkeeper.Keeper
+	MintKeeper        mintkeeper.Keeper
+	AuctionKeeper     auctionkeeper.Keeper
 	Context           sdk.Context
 	Marshaler         codec.Codec
 	LegacyAmino       *codec.LegacyAmino
+	EncodingConfig    gravityparams.EncodingConfig
 	GravityStoreKey   *sdk.KVStoreKey
 }
 
@@ -404,6 +415,8 @@ func CreateTestEnv(t *testing.T) TestInput {
 	keyIbc := sdk.NewKVStoreKey(ibchost.StoreKey)
 	keyIbcTransfer := sdk.NewKVStoreKey(ibctransfertypes.StoreKey)
 	keyBech32Ibc := sdk.NewKVStoreKey(bech32ibctypes.StoreKey)
+	keyMint := sdk.NewKVStoreKey(minttypes.StoreKey)
+	keyAuction := sdk.NewKVStoreKey(auctiontypes.StoreKey)
 
 	// Initialize memory database and mount stores on it
 	db := dbm.NewMemDB()
@@ -422,6 +435,8 @@ func CreateTestEnv(t *testing.T) TestInput {
 	ms.MountStoreWithDB(keyIbc, sdk.StoreTypeIAVL, db)
 	ms.MountStoreWithDB(keyIbcTransfer, sdk.StoreTypeIAVL, db)
 	ms.MountStoreWithDB(keyBech32Ibc, sdk.StoreTypeIAVL, db)
+	ms.MountStoreWithDB(keyMint, sdk.StoreTypeIAVL, db)
+	ms.MountStoreWithDB(keyAuction, sdk.StoreTypeIAVL, db)
 	err := ms.LoadLatestVersion()
 	require.Nil(t, err)
 
@@ -431,7 +446,7 @@ func CreateTestEnv(t *testing.T) TestInput {
 			Block: 0,
 			App:   0,
 		},
-		ChainID: "",
+		ChainID: "gravity-test-1",
 		Height:  1234567,
 		Time:    time.Date(2020, time.April, 22, 12, 0, 0, 0, time.UTC),
 		LastBlockId: tmproto.BlockID{
@@ -452,10 +467,10 @@ func CreateTestEnv(t *testing.T) TestInput {
 		ProposerAddress:    []byte{},
 	}, false, log.TestingLogger())
 
-	cdc := MakeTestCodec()
-	marshaler := MakeTestMarshaler()
+	encodingConfig := MakeTestEncodingConfig()
+	marshaler := encodingConfig.Marshaler
 
-	paramsKeeper := paramskeeper.NewKeeper(marshaler, cdc, keyParams, tkeyParams)
+	paramsKeeper := paramskeeper.NewKeeper(marshaler, encodingConfig.Amino, keyParams, tkeyParams)
 	paramsKeeper.Subspace(authtypes.ModuleName)
 	paramsKeeper.Subspace(banktypes.ModuleName)
 	paramsKeeper.Subspace(stakingtypes.ModuleName)
@@ -466,16 +481,20 @@ func CreateTestEnv(t *testing.T) TestInput {
 	paramsKeeper.Subspace(ibchost.ModuleName)
 	paramsKeeper.Subspace(ibctransfertypes.ModuleName)
 	paramsKeeper.Subspace(bech32ibctypes.ModuleName)
+	paramsKeeper.Subspace(minttypes.ModuleName)
+	paramsKeeper.Subspace(auctiontypes.ModuleName)
 
 	// this is also used to initialize module accounts for all the map keys
 	maccPerms := map[string][]string{
-		authtypes.FeeCollectorName:     nil,
-		distrtypes.ModuleName:          nil,
-		stakingtypes.BondedPoolName:    {authtypes.Burner, authtypes.Staking},
-		stakingtypes.NotBondedPoolName: {authtypes.Burner, authtypes.Staking},
-		govtypes.ModuleName:            {authtypes.Burner},
-		types.ModuleName:               {authtypes.Minter, authtypes.Burner},
-		ibctransfertypes.ModuleName:    {authtypes.Minter, authtypes.Burner},
+		authtypes.FeeCollectorName:          nil,
+		distrtypes.ModuleName:               nil,
+		stakingtypes.BondedPoolName:         {authtypes.Burner, authtypes.Staking},
+		stakingtypes.NotBondedPoolName:      {authtypes.Burner, authtypes.Staking},
+		govtypes.ModuleName:                 {authtypes.Burner},
+		types.ModuleName:                    {authtypes.Minter, authtypes.Burner},
+		ibctransfertypes.ModuleName:         {authtypes.Minter, authtypes.Burner},
+		minttypes.ModuleName:                {authtypes.Minter, authtypes.Burner},
+		auctiontypes.AuctionPoolAccountName: nil,
 	}
 
 	accountKeeper := authkeeper.NewAccountKeeper(
@@ -485,6 +504,8 @@ func CreateTestEnv(t *testing.T) TestInput {
 		authtypes.ProtoBaseAccount, // prototype
 		maccPerms,
 	)
+	accountParams := authtypes.DefaultParams()
+	accountKeeper.SetParams(ctx, accountParams)
 
 	blockedAddr := make(map[string]bool, len(maccPerms))
 	for acc := range maccPerms {
@@ -568,7 +589,7 @@ func CreateTestEnv(t *testing.T) TestInput {
 		getSubspace(paramsKeeper, slashingtypes.ModuleName).WithKeyTable(slashingtypes.ParamKeyTable()),
 	)
 
-	bApp := *baseapp.NewBaseApp("test", log.TestingLogger(), db, MakeTestEncodingConfig().TxConfig.TxDecoder())
+	bApp := *baseapp.NewBaseApp("test", log.TestingLogger(), db, encodingConfig.TxConfig.TxDecoder())
 	upgradeKeeper := upgradekeeper.NewKeeper(
 		make(map[int64]bool),
 		keyUpgrade,
@@ -611,8 +632,14 @@ func CreateTestEnv(t *testing.T) TestInput {
 		panic("Test Env Creation failure, could not set native hrp")
 	}
 
+	mintKeeper := mintkeeper.NewKeeper(marshaler, keyMint, getSubspace(paramsKeeper, minttypes.ModuleName), stakingKeeper, accountKeeper, bankKeeper, authtypes.FeeCollectorName)
+	mintKeeper.SetParams(ctx, minttypes.DefaultParams())
+
+	auctionKeeper := auctionkeeper.NewKeeper(keyAuction, getSubspace(paramsKeeper, auctiontypes.ModuleName), marshaler, &bankKeeper, &accountKeeper, &distKeeper, &mintKeeper)
+	auctionKeeper.SetParams(ctx, auctiontypes.DefaultParams())
+
 	k := NewKeeper(gravityKey, getSubspace(paramsKeeper, types.DefaultParamspace), marshaler, &bankKeeper,
-		&stakingKeeper, &slashingKeeper, &distKeeper, &accountKeeper, &ibcTransferKeeper, &bech32IbcKeeper)
+		&stakingKeeper, &slashingKeeper, &distKeeper, &accountKeeper, &ibcTransferKeeper, &bech32IbcKeeper, &auctionKeeper)
 
 	stakingKeeper = *stakingKeeper.SetHooks(
 		stakingtypes.NewMultiStakingHooks(
@@ -641,10 +668,14 @@ func CreateTestEnv(t *testing.T) TestInput {
 		DistKeeper:        distKeeper,
 		BankKeeper:        bankKeeper,
 		GovKeeper:         govKeeper,
+		IbcKeeper:         ibcKeeper,
 		IbcTransferKeeper: ibcTransferKeeper,
+		MintKeeper:        mintKeeper,
+		AuctionKeeper:     auctionKeeper,
 		Context:           ctx,
 		Marshaler:         marshaler,
-		LegacyAmino:       cdc,
+		LegacyAmino:       encodingConfig.Amino,
+		EncodingConfig:    encodingConfig,
 		GravityStoreKey:   gravityKey,
 	}
 	// check invariants before starting
@@ -693,35 +724,26 @@ func getSubspace(k paramskeeper.Keeper, moduleName string) paramstypes.Subspace 
 	return subspace
 }
 
-// MakeTestCodec creates a legacy amino codec for testing
-func MakeTestCodec() *codec.LegacyAmino {
-	var cdc = codec.NewLegacyAmino()
-	auth.AppModuleBasic{}.RegisterLegacyAminoCodec(cdc)
-	bank.AppModuleBasic{}.RegisterLegacyAminoCodec(cdc)
-	staking.AppModuleBasic{}.RegisterLegacyAminoCodec(cdc)
-	distribution.AppModuleBasic{}.RegisterLegacyAminoCodec(cdc)
-	sdk.RegisterLegacyAminoCodec(cdc)
-	ccodec.RegisterCrypto(cdc)
-	params.AppModuleBasic{}.RegisterLegacyAminoCodec(cdc)
-	types.RegisterCodec(cdc)
-	return cdc
-}
-
-// MakeTestMarshaler creates a proto codec for use in testing
-func MakeTestMarshaler() codec.Codec {
-	interfaceRegistry := codectypes.NewInterfaceRegistry()
-	std.RegisterInterfaces(interfaceRegistry)
-	ModuleBasics.RegisterInterfaces(interfaceRegistry)
-	types.RegisterInterfaces(interfaceRegistry)
-	return codec.NewProtoCodec(interfaceRegistry)
-}
-
+// This is a copy of the encoding config creation in /app
 func MakeTestEncodingConfig() gravityparams.EncodingConfig {
 	encodingConfig := gravityparams.MakeEncodingConfig()
-	std.RegisterLegacyAminoCodec(encodingConfig.Amino)
+	ethermintcodec.RegisterLegacyAminoCodec(encodingConfig.Amino)
+	ethermintcryptocodec.RegisterInterfaces(encodingConfig.InterfaceRegistry)
 	std.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+
 	ModuleBasics.RegisterLegacyAminoCodec(encodingConfig.Amino)
 	ModuleBasics.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+
+	// nolint: exhaustruct
+	encodingConfig.InterfaceRegistry.RegisterInterface(
+		"ethermint.v1.ExtensionOptionsWeb3Tx",
+		(*etherminttypes.ExtensionOptionsWeb3TxI)(nil),
+		&etherminttypes.ExtensionOptionsWeb3Tx{},
+	)
+
+	types.RegisterCodec(encodingConfig.Amino)
+	types.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+
 	return encodingConfig
 }
 

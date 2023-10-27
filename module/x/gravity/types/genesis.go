@@ -87,6 +87,13 @@ var (
 	// submitted with too low of a ChainFee value, it will be rejected in the AnteHandler
 	ParamStoreMinChainFeeBasisPoints = []byte("MinChainFeeBasisPoints")
 
+	// ParamStoreChainFeeAuctionPoolFraction allows governance to set the fraction of the SendToEth `ChainFee` that goes to
+	// the auction pool with the remainder going to stakers. If this is set to "0.1" then 10% of the fee will go to the pool
+	// with 90% going to stakers, and if set to "0.5" then it will be a 50/50 split
+	// Note that if a token is on the auction modules NonAuctionableTokens list then this value is ignored and 100% of
+	// the ChainFee will go to stakers
+	ParamStoreChainFeeAuctionPoolFraction = []byte("ChainFeeAuctionPoolFraction")
+
 	// Ensure that params implements the proper interface
 	_ paramtypes.ParamSet = &Params{
 		GravityId:                    "",
@@ -108,9 +115,10 @@ var (
 			Denom:  "",
 			Amount: sdk.Int{},
 		},
-		BridgeActive:           true,
-		EthereumBlacklist:      []string{},
-		MinChainFeeBasisPoints: 0,
+		BridgeActive:                true,
+		EthereumBlacklist:           []string{},
+		MinChainFeeBasisPoints:      0,
+		ChainFeeAuctionPoolFraction: sdk.Dec{},
 	}
 )
 
@@ -165,6 +173,7 @@ func DefaultParams() *Params {
 		BridgeActive:                 true,
 		EthereumBlacklist:            []string{},
 		MinChainFeeBasisPoints:       2,
+		ChainFeeAuctionPoolFraction:  sdk.NewDecWithPrec(50, 2), // 50%, the prec parameter moves the decimal to the left that many places
 	}
 }
 
@@ -227,6 +236,9 @@ func (p Params) ValidateBasic() error {
 	if err := validateMinChainFeeBasisPoints(p.MinChainFeeBasisPoints); err != nil {
 		return sdkerrors.Wrap(err, "min chain fee basis points parameter")
 	}
+	if err := validateChainFeeAuctionPoolFraction(p.ChainFeeAuctionPoolFraction); err != nil {
+		return sdkerrors.Wrap(err, "chain fee auction pool fraction parameter")
+	}
 	return nil
 }
 
@@ -252,6 +264,7 @@ func ParamKeyTable() paramtypes.KeyTable {
 		BridgeActive:                 false,
 		EthereumBlacklist:            []string{},
 		MinChainFeeBasisPoints:       0,
+		ChainFeeAuctionPoolFraction:  sdk.Dec{},
 	})
 }
 
@@ -277,6 +290,7 @@ func (p *Params) ParamSetPairs() paramtypes.ParamSetPairs {
 		paramtypes.NewParamSetPair(ParamStoreBridgeActive, &p.BridgeActive, validateBridgeActive),
 		paramtypes.NewParamSetPair(ParamStoreEthereumBlacklist, &p.EthereumBlacklist, validateEthereumBlacklistAddresses),
 		paramtypes.NewParamSetPair(ParamStoreMinChainFeeBasisPoints, &p.MinChainFeeBasisPoints, validateMinChainFeeBasisPoints),
+		paramtypes.NewParamSetPair(ParamStoreChainFeeAuctionPoolFraction, &p.ChainFeeAuctionPoolFraction, validateChainFeeAuctionPoolFraction),
 	}
 }
 
@@ -457,9 +471,28 @@ func validateMinChainFeeBasisPoints(i interface{}) error {
 	if !ok {
 		return fmt.Errorf("invalid parameter type: %T", i)
 	}
-	if v >= 10000 {
-		return fmt.Errorf("MinChainFeeBasisPoints is set to 10000 or more, this is an unreasonable fee amount")
+	if v > 10000 {
+		return fmt.Errorf("MinChainFeeBasisPoints is set to over 10000, this is an unreasonable fee amount")
 	}
+	return nil
+}
+
+func validateChainFeeAuctionPoolFraction(i interface{}) error {
+	v, ok := i.(sdk.Dec)
+	if !ok {
+		return fmt.Errorf("invalid parameter type: %T", i)
+	}
+
+	if v.IsNil() {
+		return fmt.Errorf("chain fee auction pool fraction must be not nil")
+	}
+	if v.IsNegative() {
+		return fmt.Errorf("chain fee auction pool fraction must be non-negative: %s", v)
+	}
+	if v.GT(sdk.OneDec()) {
+		return fmt.Errorf("chain fee auction pool fraction too large: %s", v)
+	}
+
 	return nil
 }
 
